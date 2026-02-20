@@ -229,20 +229,20 @@ case "${1:-}" in
     exec git-stack-reorder "$@"
     ;;
   next)
-    exec git-next
+    exec git-stack-next
     ;;
   prev)
-    exec git-prev
+    exec git-stack-prev
     ;;
   amend)
-    exec git-amend
+    exec git-stack-amend
     ;;
   reword)
-    exec git-reword
+    exec git-stack-reword
     ;;
   edit)
     shift
-    exec git-edit "$@"
+    exec git-stack-edit "$@"
     ;;
   -i|--interactive)
     show_stack true
