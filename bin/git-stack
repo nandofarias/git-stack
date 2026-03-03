@@ -87,38 +87,50 @@ discover_stack() {
     ordered+=("${stack[$i]}")
   done
 
-  # In full mode, find descendant branches above HEAD
-  if [[ "$mode" == "full" ]]; then
-    local head_sha
-    head_sha=$(git rev-parse HEAD)
-    local descendants=()
-
-    for sha in "${!branch_at_commit[@]}"; do
-      for b in ${branch_at_commit[$sha]}; do
-        [[ "$b" == "$base_branch" || "$b" == "$current" ]] && continue
-        # Skip branches already in the stack
-        local already=false
-        for s in "${ordered[@]}"; do
-          [[ "$s" == "$b" ]] && { already=true; break; }
-        done
-        $already && continue
-
-        # Check if this branch descends from HEAD
-        if git merge-base --is-ancestor HEAD "$b" 2>/dev/null; then
-          local dist
-          dist=$(git rev-list --count "HEAD..$b" 2>/dev/null) || continue
-          descendants+=("$dist:$b")
-        fi
-      done
-    done
-
-    # Sort descendants by distance (closest first)
-    if [[ ${#descendants[@]} -gt 0 ]]; then
-      IFS=$'\n' sorted_desc=($(printf '%s\n' "${descendants[@]}" | sort -t: -k1 -n)); unset IFS
-      for entry in "${sorted_desc[@]}"; do
-        ordered+=("${entry#*:}")
-      done
+  # In full mode, walk up the chain: find direct child, then its child, etc.
+  # Skip when on the base branch (ambiguous: multiple stacks may exist)
+  if [[ "$mode" == "full" && "$current" != "$base_branch" ]]; then
+    local tip
+    if [[ ${#ordered[@]} -gt 0 ]]; then
+      tip="${ordered[-1]}"
+    else
+      tip="$current"
     fi
+
+    while true; do
+      local tip_sha
+      tip_sha=$(git rev-parse "$tip")
+      local best_name=""
+      local best_dist=999999
+
+      for sha in "${!branch_at_commit[@]}"; do
+        for b in ${branch_at_commit[$sha]}; do
+          [[ "$b" == "$base_branch" || "$b" == "$tip" ]] && continue
+          # Skip branches already in the stack
+          local already=false
+          for s in "${ordered[@]}"; do
+            [[ "$s" == "$b" ]] && { already=true; break; }
+          done
+          $already && continue
+
+          # Check if tip is a direct ancestor of this branch
+          if git merge-base --is-ancestor "$tip" "$b" 2>/dev/null; then
+            local dist
+            dist=$(git rev-list --count "$tip..$b" 2>/dev/null) || continue
+            if [[ $dist -lt $best_dist ]]; then
+              best_dist=$dist
+              best_name="$b"
+            fi
+          fi
+        done
+      done
+
+      if [[ -z "$best_name" ]]; then
+        break
+      fi
+      ordered+=("$best_name")
+      tip="$best_name"
+    done
   fi
 
   printf '%s\n' "${ordered[@]}"
@@ -130,7 +142,7 @@ show_stack() {
   local current
   current=$(git rev-parse --abbrev-ref HEAD)
 
-  mapfile -t branches < <(discover_stack)
+  mapfile -t branches < <(discover_stack full)
 
   if [[ ${#branches[@]} -eq 0 ]]; then
     echo "No branches in stack (on base branch or no branches between base and HEAD)"
@@ -156,7 +168,16 @@ show_stack() {
       git checkout "$selected"
     fi
   else
+    local base_branch
+    base_branch=$(detect_base)
     echo -e "${BOLD}Branch stack:${RESET}"
+    local on_base=false
+    [[ "$current" == "$base_branch" ]] && on_base=true
+    if $on_base; then
+      echo -e "  ▸ ${CYAN}${base_branch}${RESET} (base)"
+    else
+      echo -e "    ${CYAN}${base_branch}${RESET} (base)"
+    fi
     for b in "${branches[@]}"; do
       local_sha=$(git rev-parse "$b" 2>/dev/null)
       remote_sha=$(git rev-parse "origin/$b" 2>/dev/null 2>&1) || remote_sha=""
