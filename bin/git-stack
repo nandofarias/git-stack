@@ -153,26 +153,40 @@ sync_stack() {
 
   local prev
   prev=$(detect_base)
+  local prev_old_sha=""
   local rebased=0
 
   for b in "${branches[@]}"; do
+    local old_sha
+    old_sha=$(git rev-parse "$b")
+
     # Check if prev is already an ancestor of b
     if git merge-base --is-ancestor "$prev" "$b" 2>/dev/null; then
       echo -e "  ${GREEN}✓${RESET} $b (already on top of $prev)"
     else
-      # Find the fork point between prev and b
+      # Use the previous branch's pre-rebase SHA as the fork point.
+      # After rebasing branch A, its commits have new SHAs. If we used
+      # merge-base between the new A and old B, it would find the wrong
+      # fork point (way back on the base branch), causing A's commits to
+      # be replayed into B. Using A's old SHA correctly identifies where
+      # B's unique commits begin.
       local fork
-      fork=$(git merge-base "$prev" "$b" 2>/dev/null) || fork=$(git merge-base "$(detect_base)" "$b" 2>/dev/null)
+      if [[ -n "$prev_old_sha" ]]; then
+        fork="$prev_old_sha"
+      else
+        fork=$(git merge-base "$prev" "$b" 2>/dev/null) || fork=$(git merge-base "$(detect_base)" "$b" 2>/dev/null)
+      fi
 
       echo -e "  ${YELLOW}↻${RESET} $b → rebasing onto $prev..."
       if git rebase --onto "$prev" "$fork" "$b" 2>&1 | sed 's/^/    /'; then
-        ((rebased++))
+        rebased=$((rebased + 1))
       else
         echo -e "  ${RED}✗${RESET} Rebase conflict on $b! Resolve and run ${BOLD}git stack sync${RESET} again."
         return 1
       fi
     fi
     prev="$b"
+    prev_old_sha="$old_sha"
   done
 
   # Return to original branch
