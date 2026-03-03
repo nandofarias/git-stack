@@ -53,6 +53,7 @@ detect_base() {
 
 # ── Discover stack ──────────────────────────────────────────────
 discover_stack() {
+  local mode="${1:-head}"  # "head" = only ancestors of HEAD, "full" = include descendants
   local base_branch
   base_branch=$(detect_base)
   local current
@@ -81,9 +82,46 @@ discover_stack() {
   done < <(git log --format='%H' --ancestry-path "$merge_base..HEAD" 2>/dev/null)
 
   # Reverse so bottom of stack (closest to develop) is first
+  local ordered=()
   for ((i=${#stack[@]}-1; i>=0; i--)); do
-    echo "${stack[$i]}"
+    ordered+=("${stack[$i]}")
   done
+
+  # In full mode, find descendant branches above HEAD
+  if [[ "$mode" == "full" ]]; then
+    local head_sha
+    head_sha=$(git rev-parse HEAD)
+    local descendants=()
+
+    for sha in "${!branch_at_commit[@]}"; do
+      for b in ${branch_at_commit[$sha]}; do
+        [[ "$b" == "$base_branch" || "$b" == "$current" ]] && continue
+        # Skip branches already in the stack
+        local already=false
+        for s in "${ordered[@]}"; do
+          [[ "$s" == "$b" ]] && { already=true; break; }
+        done
+        $already && continue
+
+        # Check if this branch descends from HEAD
+        if git merge-base --is-ancestor HEAD "$b" 2>/dev/null; then
+          local dist
+          dist=$(git rev-list --count "HEAD..$b" 2>/dev/null) || continue
+          descendants+=("$dist:$b")
+        fi
+      done
+    done
+
+    # Sort descendants by distance (closest first)
+    if [[ ${#descendants[@]} -gt 0 ]]; then
+      IFS=$'\n' sorted_desc=($(printf '%s\n' "${descendants[@]}" | sort -t: -k1 -n)); unset IFS
+      for entry in "${sorted_desc[@]}"; do
+        ordered+=("${entry#*:}")
+      done
+    fi
+  fi
+
+  printf '%s\n' "${ordered[@]}"
 }
 
 # ── Show stack ──────────────────────────────────────────────────
@@ -142,7 +180,7 @@ sync_stack() {
   local current
   current=$(git rev-parse --abbrev-ref HEAD)
 
-  mapfile -t branches < <(discover_stack)
+  mapfile -t branches < <(discover_stack full)
 
   if [[ ${#branches[@]} -eq 0 ]]; then
     echo "No branches in stack"
@@ -202,7 +240,7 @@ sync_stack() {
 
 # ── Push stack ──────────────────────────────────────────────────
 push_stack() {
-  mapfile -t branches < <(discover_stack)
+  mapfile -t branches < <(discover_stack full)
 
   if [[ ${#branches[@]} -eq 0 ]]; then
     echo "No branches in stack"
