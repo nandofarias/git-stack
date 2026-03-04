@@ -166,6 +166,16 @@ git config stack.base main
 git config --global stack.base develop
 ```
 
+## Updating
+
+```bash
+cd /path/to/git-stack
+git pull
+./install.sh
+```
+
+Check your version with `git stack --version`.
+
 ## Limitations
 
 - Branches discovered by commit ancestry and patch-id matching. Completely unrelated branches won't appear in a stack.

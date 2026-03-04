@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+GIT_STACK_VERSION="1.1.0"
+
 GREEN='\033[0;32m'
 YELLOW='\033[0;33m'
 RED='\033[0;31m'
@@ -26,6 +28,7 @@ usage() {
   echo "Options:"
   echo "  -i, --interactive   Pick a branch to checkout (requires fzf)"
   echo "  -h, --help          Show this help"
+  echo "  -v, --version       Show version"
   echo ""
   echo "Config:"
   echo "  git config stack.base <branch>   Set base branch (default: auto-detect develop/main/master)"
@@ -315,6 +318,10 @@ push_stack() {
 
 # ── Main ────────────────────────────────────────────────────────
 case "${1:-}" in
+  -v|--version)
+    echo "git-stack $GIT_STACK_VERSION"
+    exit 0
+    ;;
   -h|--help|help)
     usage
     ;;

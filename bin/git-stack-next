@@ -11,19 +11,34 @@ fi
 current=$(git rev-parse --abbrev-ref HEAD)
 current_sha=$(git rev-parse HEAD)
 
-# Find all branches that forked from current and have their own commits
+base=$(git config --get stack.base 2>/dev/null || true)
+if [[ -z "$base" ]]; then
+  for candidate in develop main master; do
+    git rev-parse --verify "$candidate" &>/dev/null && { base="$candidate"; break; }
+  done
+fi
+
+# Find direct children: branches where current is an ancestor,
+# or (for rewritten branches) git cherry shows shared patches.
 descendants=()
 while IFS= read -r line; do
   sha="${line%% *}"
   name="${line#* }"
-  [[ "$name" == "develop" || "$name" == "$current" ]] && continue
-  mb=$(git merge-base "$current_sha" "$sha" 2>/dev/null) || continue
-  # Skip if branch tip IS the merge-base (no unique commits)
-  [[ "$mb" == "$sha" ]] && continue
-  # Count unique commits on this branch (beyond fork point)
-  unique=$(git rev-list --count "$mb..$sha" 2>/dev/null) || continue
-  [[ "$unique" -eq 0 ]] && continue
-  descendants+=("$unique:$name")
+  [[ "$name" == "$base" || "$name" == "$current" ]] && continue
+
+  if git merge-base --is-ancestor "$current_sha" "$sha" 2>/dev/null; then
+    # Direct ancestor
+    dist=$(git rev-list --count "$current_sha..$sha" 2>/dev/null) || continue
+    [[ "$dist" -eq 0 ]] && continue
+    descendants+=("$dist:$name")
+  else
+    # Check for rewritten parent via git cherry (patch-id matching)
+    shared=$(git cherry "$current" "$name" 2>/dev/null | grep -c '^-' || true)
+    unique=$(git cherry "$current" "$name" 2>/dev/null | grep -c '^+' || true)
+    if [[ $shared -gt 0 && $unique -gt 0 ]]; then
+      descendants+=("$unique:$name")
+    fi
+  fi
 done < <(git for-each-ref --format='%(objectname) %(refname:short)' refs/heads/)
 
 if [[ ${#descendants[@]} -eq 0 ]]; then
@@ -31,7 +46,7 @@ if [[ ${#descendants[@]} -eq 0 ]]; then
   exit 1
 fi
 
-# Sort by number of unique commits (fewest first = closest to base)
+# Sort by distance (fewest first)
 IFS=$'\n' sorted=($(printf '%s\n' "${descendants[@]}" | sort -t: -k1 -n)); unset IFS
 
 # A direct child is one where no other descendant sits between it and current.
