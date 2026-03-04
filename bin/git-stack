@@ -113,13 +113,30 @@ discover_stack() {
           done
           $already && continue
 
-          # Check if tip is a direct ancestor of this branch
-          if git merge-base --is-ancestor "$tip" "$b" 2>/dev/null; then
+          # Check if this branch is a child of tip.
+          if git merge-base --is-ancestor "$tip_sha" "$sha" 2>/dev/null; then
+            # Direct ancestor: tip is in candidate's history
             local dist
-            dist=$(git rev-list --count "$tip..$b" 2>/dev/null) || continue
+            dist=$(git rev-list --count "$tip_sha..$sha" 2>/dev/null) || continue
             if [[ $dist -lt $best_dist ]]; then
               best_dist=$dist
               best_name="$b"
+            fi
+          else
+            # Tip may have been rewritten/rebased. Use git cherry to check
+            # if candidate shares commits with tip (by patch content, not SHA).
+            # git cherry tip candidate: '-' = shared, '+' = unique to candidate
+            local shared unique_count
+            shared=$(git cherry "$tip" "$b" 2>/dev/null | grep -c '^-' || true)
+            unique_count=$(git cherry "$tip" "$b" 2>/dev/null | grep -c '^+' || true)
+
+            # Candidate is a child if it shares most of tip's commits
+            # AND has at least one unique commit of its own
+            if [[ $shared -gt 0 && $unique_count -gt 0 ]]; then
+              if [[ $unique_count -lt $best_dist ]]; then
+                best_dist=$unique_count
+                best_name="$b"
+              fi
             fi
           fi
         done
@@ -178,11 +195,20 @@ show_stack() {
     else
       echo -e "    ${CYAN}${base_branch}${RESET} (base)"
     fi
+    local prev_in_stack="$base_branch"
     for b in "${branches[@]}"; do
       local_sha=$(git rev-parse "$b" 2>/dev/null)
       remote_sha=$(git rev-parse "origin/$b" 2>/dev/null 2>&1) || remote_sha=""
 
-      if [[ "$local_sha" == "$remote_sha" ]]; then
+      # Check if parent is still an ancestor (stack is in sync)
+      local diverged=false
+      if ! git merge-base --is-ancestor "$prev_in_stack" "$b" 2>/dev/null; then
+        diverged=true
+      fi
+
+      if $diverged; then
+        color="$RED"; status="⚡"
+      elif [[ "$local_sha" == "$remote_sha" ]]; then
         color="$GREEN"; status="✓"
       else
         color="$YELLOW"; status="↑"
@@ -192,6 +218,7 @@ show_stack() {
       [[ "$b" == "$current" ]] && marker="▸ "
 
       echo -e "  ${marker}${color}${b}${RESET} ${color}${status}${RESET}"
+      prev_in_stack="$b"
     done
   fi
 }
